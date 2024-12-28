@@ -1,0 +1,74 @@
+name: Build and Release Master
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build for 8 and 11
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout
+      - name: Set up JDK 11
+        uses: actions/setup-java@v2
+        with:
+          java-version: 11
+          distribution: 'adopt'
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+      - name: Bump Release Version
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v5.5
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build with Gradle
+        run: |
+          export JAVA_COMPILATION_VERSION=8
+          export PROJECT_VERSION=${{ steps.tag_version.outputs.new_version }}
+          ./gradlew build
+          export JAVA_COMPILATION_VERSION=11
+          ./gradlew build kafkaConnectPublish
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag_version.outputs.new_tag }}
+          name: ${{ steps.tag_version.outputs.new_tag }}
+          body: |
+            ${{ steps.tag_version.outputs.changelog }}
+            ## Confluent Archive Zip
+            Attached to this release is the adobe-streaming-connect-sink-${{ steps.tag_version.outputs.new_version }}.zip confluent archive - see the [confluent documentation](https://docs.confluent.io/home/connect/install.html) about installing a connector manually for more information.
+
+            ## All-In-One Dependency JAR
+            All in one dependency JAR could be used in place of multiple jars.
+            Following all-in-one AEP sink connector JAR are attached in release :
+            1. streaming-connect-sink-${{ steps.tag_version.outputs.new_version }}-java-8.jar  : Compiled with java 8
+            2. streaming-connect-sink-${{ steps.tag_version.outputs.new_version }}-java-11.jar : Compiled with java 11
+
+            For connector properties and sample connector configuration please refer : [Developer Guide](https://github.com/adobe/experience-platform-streaming-connect/blob/master/DEVELOPER_GUIDE.md)
+          draft: true
+          prerelease: false
+          files: |
+            ./streaming-connect-sink/build/libs/streaming-connect-sink-*.jar
+            ./build/distributions/adobeinc-streaming-connect-sink-*.zip
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/adobe/experience-platform-streaming-connect:latest,ghcr.io/adobe/experience-platform-streaming-connect:${{ steps.tag_version.outputs.new_version }}
